@@ -1,46 +1,8 @@
-//==============================================================================
-/*
-    Software License Agreement (BSD License)
-    Copyright (c) 2003-2016, CHAI3D.
-    (www.chai3d.org)
+#include <WinSock2.h>
+#include <WS2tcpip.h>
+#include <Windows.h>
 
-    All rights reserved.
-
-    Redistribution and use in source and binary forms, with or without
-    modification, are permitted provided that the following conditions
-    are met:
-
-    * Redistributions of source code must retain the above copyright
-    notice, this list of conditions and the following disclaimer.
-
-    * Redistributions in binary form must reproduce the above
-    copyright notice, this list of conditions and the following
-    disclaimer in the documentation and/or other materials provided
-    with the distribution.
-
-    * Neither the name of CHAI3D nor the names of its contributors may
-    be used to endorse or promote products derived from this software
-    without specific prior written permission.
-
-    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
-    FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
-    COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-    INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-    BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-    LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-    CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-    LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
-    ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-    POSSIBILITY OF SUCH DAMAGE. 
-
-    \author    <http://www.chai3d.org>
-    \author    Francois Conti
-    \version   3.2.0 $Rev: 1869 $
-*/
-//==============================================================================
-
+#pragma comment(lib,"ws2_32")
 //------------------------------------------------------------------------------
 #include "chai3d.h"
 //------------------------------------------------------------------------------
@@ -49,6 +11,19 @@
 using namespace chai3d;
 using namespace std;
 //------------------------------------------------------------------------------
+
+#define BUFLEN 512  //Max length of buffer
+#define PORT 8888   //The port on which to listen for incoming data
+
+struct messageM2S {
+	cVector3d position;
+	cMatrix3d rotation;
+};
+
+struct messageS2M {
+	cVector3d linearVelocity;
+	cVector3d angularVelocity;
+};
 
 //------------------------------------------------------------------------------
 // GENERAL SETTINGS
@@ -122,6 +97,12 @@ bool simulationRunning = false;
 // a flag to indicate if the haptic simulation has terminated
 bool simulationFinished = true;
 
+// a flag to indicate if the communication with slave is currently running
+bool communicationRunning = false;
+
+// a flag to indicate if the communication with slave has terminated
+bool communicationFinished = true;
+
 // a frequency counter to measure the simulation graphic rate
 cFrequencyCounter freqCounterGraphics;
 
@@ -130,6 +111,9 @@ cFrequencyCounter freqCounterHaptics;
 
 // haptic thread
 cThread* hapticsThread;
+
+// comunications thread
+cThread* communicationsThread;
 
 // a handle to window display context
 GLFWwindow* window = NULL;
@@ -143,6 +127,19 @@ int height = 0;
 // swap interval for the display context (vertical synchronization)
 int swapInterval = 1;
 
+// SOCKET AND COMMUNICATIONS
+
+struct sockaddr_in server, si_other;
+SOCKET s;
+int recv_len, slen = sizeof(si_other);
+char buf[BUFLEN];
+char message[BUFLEN];
+WSADATA wsa;
+
+cVector3d linearVelocity;
+cVector3d angularVelocity;
+cVector3d rposition;
+cMatrix3d rrotation;
 
 //------------------------------------------------------------------------------
 // DECLARED FUNCTIONS
@@ -163,27 +160,24 @@ void updateGraphics(void);
 // this function contains the main haptics simulation loop
 void updateHaptics(void);
 
+// this function contains the communication part. A UDP socket performs bilateral communication to send the position and rotation and receive forces at the teleoperated phantom.
+void updateData(void);
+
 // this function closes the application
 void close(void);
 
+// this function performs the initialization of the socket
+void initialize_S_Socket(void);
 
-//==============================================================================
-/*
-    DEMO:   01-mydevice.cpp
+// this fuction finishes the socket
+void end_S_Socket(void);
 
-    This application illustrates how to program forces, torques and gripper
-    forces to your haptic device.
+// this function sends the position to the slave
+void UDP_S_SendHaptics(void);
 
-    In this example the application opens an OpenGL window and displays a
-    3D cursor for the device connected to your computer. If the user presses 
-    onto the user button (if available on your haptic device), the color of 
-    the cursor changes from blue to green.
+// this function receives the data from the slave
+void UDP_S_ReceiveHaptics(void);
 
-    In the main haptics loop function  "updateHaptics()" , the position,
-    orientation and user switch status are read at each haptic cycle. 
-    Force and torque vectors are computed and sent back to the haptic device.
-*/
-//==============================================================================
 
 int main(int argc, char* argv[])
 {
@@ -191,11 +185,13 @@ int main(int argc, char* argv[])
     // INITIALIZATION
     //--------------------------------------------------------------------------
 
+
+	initialize_S_Socket();
     cout << endl;
     cout << "-----------------------------------" << endl;
     cout << "CHAI3D" << endl;
-    cout << "Demo: 01-mydevice" << endl;
-    cout << "Copyright 2003-2016" << endl;
+    cout << "CHAI3D" << endl;
+    cout << "Teleoperation - Slave" << endl;
     cout << "-----------------------------------" << endl << endl << endl;
     cout << "Keyboard Options:" << endl << endl;
     cout << "[1] - Enable/Disable potential field" << endl;
@@ -397,10 +393,20 @@ int main(int argc, char* argv[])
     // START SIMULATION
     //--------------------------------------------------------------------------
 
+
+	// initializing teleoperated variables
+	rposition.set(0, 0, 0);
+	rrotation = cMatrix3d(0, 0, 0,
+						  0, 0, 0,
+		                  0, 0, 0);
     // create a thread which starts the main haptics rendering loop
     hapticsThread = new cThread();
     hapticsThread->start(updateHaptics, CTHREAD_PRIORITY_HAPTICS);
 
+
+	// create a thread which starts the main haptics rendering loop
+	communicationsThread = new cThread();
+	communicationsThread->start(updateData, CTHREAD_PRIORITY_GRAPHICS);
     // setup callback when application exits
     atexit(close);
 
@@ -543,7 +549,13 @@ void close(void)
     // stop the simulation
     simulationRunning = false;
 
-    // wait for graphics and haptics loops to terminate
+	// stop the communication
+	communicationRunning = false;
+
+	// Close socket
+	end_S_Socket();
+
+    while (!simulationFinished) { cSleepMs(100); }
     while (!simulationFinished) { cSleepMs(100); }
 
     // close haptic device
@@ -593,6 +605,22 @@ void updateGraphics(void)
     if (err != GL_NO_ERROR) cout << "Error:  %s\n" << gluErrorString(err);
 }
 
+//------------------------------------------------------------------------------
+
+void updateData(void) {
+	// comunication in now running
+	communicationRunning = true;
+	communicationFinished = false;
+
+	// main haptic simulation loop
+	while (communicationRunning) {
+		UDP_S_ReceiveHaptics();
+		UDP_S_SendHaptics();
+	}
+
+	// exit communication thread
+	communicationFinished = true;
+}
 //------------------------------------------------------------------------------
 
 void updateHaptics(void)
@@ -683,40 +711,39 @@ void updateHaptics(void)
         // update global variable for graphic display update
         hapticDevicePosition = position;
 
-
         /////////////////////////////////////////////////////////////////////
         // COMPUTE AND APPLY FORCES
         /////////////////////////////////////////////////////////////////////
 
-        // desired position
-        cVector3d desiredPosition;
-        desiredPosition.set(0.0, 0.0, 0.0);
-
-        // desired orientation
-        cMatrix3d desiredRotation;
-        desiredRotation.identity();
+		//// desired position
+		//cVector3d desiredPosition;
+		//desiredPosition.set(0.0, 0.0, 0.0);
+        
+        //// desired orientation
+        //cMatrix3d desiredRotation;
+        //desiredRotation.identity();
         
         // variables for forces
         cVector3d force (0,0,0);
         cVector3d torque (0,0,0);
         double gripperForce = 0.0;
 
-        // apply force field
-        if (useForceField)
-        {
+        //// apply force field
+        //if (useTeleoperationForceField)
+        //{
             // compute linear force
             double Kp = 25; // [N/m]
-            cVector3d forceField = Kp * (desiredPosition - position);
+            cVector3d forceField = Kp * (rposition - position);
             force.add(forceField);
 
             // compute angular torque
             double Kr = 0.05; // [N/m.rad]
             cVector3d axis;
             double angle;
-            cMatrix3d deltaRotation = cTranspose(rotation) * desiredRotation;
+            cMatrix3d deltaRotation = cTranspose(rotation) * rrotation;
             deltaRotation.toAxisAngle(axis, angle);
             torque = rotation * ((Kr * angle) * axis);
-        }
+        //}
     
         // apply damping term
         if (useDamping)
@@ -750,3 +777,99 @@ void updateHaptics(void)
 }
 
 //------------------------------------------------------------------------------
+void initialize_S_Socket(void) {
+	//Initialise winsock
+	int wsOk = WSAStartup(MAKEWORD(2, 2), &wsa);
+	if (wsOk != 0)
+	{
+		printf("Winsock initialization failed. Error Code : %d\n", WSAGetLastError());
+		exit(EXIT_FAILURE);
+	}
+	printf("Winsock initialised.\n");
+
+	//create socket
+	s = socket(AF_INET, SOCK_DGRAM, 0);
+	if (s == SOCKET_ERROR)
+	{
+		printf("socket() failed with error code : %d\n", WSAGetLastError());
+		exit(EXIT_FAILURE);
+	}
+	printf("Socket created.\n");
+	//Initialise winsock
+	int wsOk = WSAStartup(MAKEWORD(2, 2), &wsa);
+	if (wsOk != 0)
+	{
+		printf("Winsock initialization failed. Error Code : %d\n", WSAGetLastError());
+		exit(EXIT_FAILURE);
+	}
+	printf("Winsock initialised.\n");
+
+	//create socket
+	s = socket(AF_INET, SOCK_DGRAM, 0);
+	if (s == SOCKET_ERROR)
+	{
+		printf("socket() failed with error code : %d\n", WSAGetLastError());
+		exit(EXIT_FAILURE);
+	}
+	printf("Socket created.\n");
+
+	// Prepare the sockaddr_in structure
+	server.sin_family = AF_INET;
+	server.sin_family = AF_INET;
+	server.sin_port = htons(PORT);
+
+	//Bind
+	if (::bind(s, (struct sockaddr *)&server, sizeof(server)) == SOCKET_ERROR)
+	{
+		printf("Bind failed with error code : %d\n", WSAGetLastError());
+		exit(EXIT_FAILURE);
+	}
+	puts("Bind done");
+}
+
+//------------------------------------------------------------------------------
+
+void end_S_Socket(void) {
+	closesocket(s);
+	WSACleanup();
+}
+
+//------------------------------------------------------------------------------
+
+void UDP_S_SendHaptics(void) {
+	messageS2M myMessage;
+	myMessage.linearVelocity = linearVelocity;
+	myMessage.angularVelocity = angularVelocity;
+
+	char TempBuf[sizeof(messageS2M)];
+	memcpy(&TempBuf, &myMessage, sizeof(messageS2M));
+	int sendOk = sendto(s, TempBuf, sizeof(TempBuf), 0, (struct sockaddr *) &si_other, slen);
+	if (sendOk == SOCKET_ERROR)
+	{
+		cout << "That didn't work! " << WSAGetLastError() << endl;
+	}
+}
+
+//------------------------------------------------------------------------------
+
+void UDP_S_ReceiveHaptics(void) {
+	messageM2S myMessage;
+	//clear the buffer by filling null, it might have previously received data
+	memset(buf, '\0', BUFLEN);
+	//try to receive some data, this is a blocking call
+	int bytesIn = recvfrom(s, buf, BUFLEN, 0, (struct sockaddr *) &si_other, &slen);
+	if (bytesIn == SOCKET_ERROR)
+	{
+		printf("recvfrom() failed with error code : %d\n", WSAGetLastError());
+		//exit(EXIT_FAILURE);
+	}
+	else if (bytesIn == sizeof(messageM2S)) {
+		//printf("Data received\n");
+		memcpy(&myMessage, buf, sizeof(messageM2S));
+		rposition = myMessage.position;
+		rrotation = myMessage.rotation;
+	}
+	else {
+		printf("Wrong datagram received.. (len:%d)\n", bytesIn);
+	}
+}
