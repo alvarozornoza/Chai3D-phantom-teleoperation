@@ -239,7 +239,7 @@ int main(int argc, char* argv[])
     }
 
     // create display context
-    window = glfwCreateWindow(w, h, "CHAI3D", NULL, NULL);
+    window = glfwCreateWindow(w, h, "Slave", NULL, NULL);
     if (!window)
     {
         cout << "failed to create window" << endl;
@@ -778,23 +778,6 @@ void updateHaptics(void)
 
 //------------------------------------------------------------------------------
 void initialize_S_Socket(void) {
-	//Initialise winsock
-	int wsOk = WSAStartup(MAKEWORD(2, 2), &wsa);
-	if (wsOk != 0)
-	{
-		printf("Winsock initialization failed. Error Code : %d\n", WSAGetLastError());
-		exit(EXIT_FAILURE);
-	}
-	printf("Winsock initialised.\n");
-
-	//create socket
-	s = socket(AF_INET, SOCK_DGRAM, 0);
-	if (s == SOCKET_ERROR)
-	{
-		printf("socket() failed with error code : %d\n", WSAGetLastError());
-		exit(EXIT_FAILURE);
-	}
-	printf("Socket created.\n");
 	//Initialise winsock
 	int wsOk = WSAStartup(MAKEWORD(2, 2), &wsa);
 	if (wsOk != 0)
