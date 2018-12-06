@@ -78,6 +78,12 @@ cFontPtr font;
 // a label to display the rate [Hz] at which the simulation is running
 cLabel* labelRates;
 
+// some small spheres (cursor) representing position of each haptic device
+cShapeSphere* cursor;
+
+// some lines representing the velocity vector of each haptic device
+cShapeLine* velocity;
+
 // a flag for using damping (ON/OFF)
 bool useDamping = false;
 
