@@ -19,7 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectName>01-teleoperation-client</ProjectName>
+    <ProjectName>01-teleoperation-slave</ProjectName>
     <ProjectGuid>{DF4A1F32-BA3E-4604-A9F5-721CAAA9EA71}</ProjectGuid>
     <RootNamespace>01-devices</RootNamespace>
     <Keyword>Win32Proj</Keyword>
@@ -260,7 +260,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="teleoperation-client.cpp" />
+    <ClCompile Include="teleoperation-slave.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)/Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

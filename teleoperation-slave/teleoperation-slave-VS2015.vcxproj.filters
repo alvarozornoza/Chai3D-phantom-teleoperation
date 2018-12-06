@@ -7,7 +7,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="teleoperation-client.cpp">
+    <ClCompile Include="teleoperation-slave.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
