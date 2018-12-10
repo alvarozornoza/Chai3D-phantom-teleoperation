@@ -13,11 +13,12 @@ using namespace std;
 //------------------------------------------------------------------------------
 #define BUFLEN 512  //Max length of buffer
 #define PORT 8888   //The port on which to listen for incoming data
-#define SERVER_IP "127.0.0.1"
+#define SERVER_IP "192.168.43.7"
 
 struct messageM2S {
 	cVector3d position;
 	cMatrix3d rotation;
+	bool hand;
 };
 
 struct messageS2M {
@@ -138,6 +139,7 @@ cMatrix3d rotation;
 cVector3d rlinearVelocity;
 cVector3d rangularVelocity;
 
+bool hand;
 //------------------------------------------------------------------------------
 // DECLARED FUNCTIONS
 //------------------------------------------------------------------------------
@@ -610,7 +612,7 @@ void updateData(void) {
 	// main haptic simulation loop
 	while (communicationRunning) {
 		UDP_M_SendHaptics();
-		UDP_M_ReceiveHaptics();
+		//UDP_M_ReceiveHaptics();
 	}
 
 	// exit communication thread
@@ -685,9 +687,14 @@ void updateHaptics(void)
         // the user-switch (ON = TRUE / OFF = FALSE)
         if (button0)
         {
+			hand = true;
             cursor->m_material->setGreenMediumAquamarine(); 
         }
-        else if (button1)
+		else {
+			hand = false;
+			cursor->m_material->setBlueRoyal();
+		}
+        /*else if (button1)
         {
             cursor->m_material->setYellowGold();
         }
@@ -702,7 +709,7 @@ void updateHaptics(void)
         else
         {
             cursor->m_material->setBlueRoyal();
-        }
+        }*/
 
         // update global variable for graphic display update
         hapticDevicePosition = position;
@@ -814,6 +821,9 @@ void UDP_M_SendHaptics(){
 	messageM2S myMessage;
 	myMessage.position = position;
 	myMessage.rotation = rotation;
+	myMessage.hand = hand;
+
+	cout << position << endl;
 
 	char TempBuf[sizeof(messageM2S)];
 	memcpy(&TempBuf, &myMessage, sizeof(messageM2S));
